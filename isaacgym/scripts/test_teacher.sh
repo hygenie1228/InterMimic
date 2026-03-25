@@ -24,4 +24,5 @@ xvfb-run -a \
     --checkpoint ${CKPT_PATH} \
     --save_images \
     --num_episode 4 \
-    --num_envs 16
+    --num_envs 16 \
+    --visualize

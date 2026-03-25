@@ -272,10 +272,11 @@ def main():
     set_np_formatting()
     args = get_args()
     cfg, cfg_train, logdir = load_cfg(args)
+    do_visualize = getattr(args, "save_images", False) and getattr(args, "visualize", False)
 
-    # Saving frames requires an actual viewer in this codebase.
-    # Even if --headless is set, we force headless=false when --save_images is requested.
-    if getattr(args, "save_images", False):
+    # Visualization requires an actual viewer in this codebase.
+    # Even if --headless is set, we force headless=false only when visualization is requested.
+    if do_visualize:
         cfg["headless"] = False
 
     # Task render code checks EXP_DIR env var; expose CLI --exp_dir to it.
@@ -313,7 +314,7 @@ def main():
     if args.op != -1.:
         cfg['env']['rewardWeights']['op'] = args.op
 
-    if args.save_images:
+    if do_visualize:
         cfg['env']['saveImages'] = True
 
     if getattr(args, "num_episode", 0) > 0:
@@ -340,7 +341,7 @@ def main():
     runner.reset()
     try:
         # Best-effort cleanup so video encoding doesn't include stale frames.
-        if getattr(args, "test", False) and getattr(args, "save_images", False) and getattr(args, "exp_dir", "").strip():
+        if getattr(args, "test", False) and do_visualize and getattr(args, "exp_dir", "").strip():
             exp_override = _normalize_exp_override(args.exp_dir.strip())
             exp_root = resolve_repo_path("exp", must_exist=False)
             images_dir = exp_root / exp_override / "images"
@@ -355,14 +356,15 @@ def main():
         runner.run(vargs)
     finally:
         # Encode after the test run completes.
-        if getattr(args, "test", False) and getattr(args, "save_images", False) and getattr(args, "exp_dir", "").strip():
+        if getattr(args, "test", False) and do_visualize and getattr(args, "exp_dir", "").strip():
             try:
                 env_cfg = cfg.get("env", {}) if isinstance(cfg, dict) else {}
                 fps = float(env_cfg.get("dataFPS", 30.0))
                 out_video = _encode_visualization_video_from_frames(args.exp_dir.strip(), fps=fps, env_id=0)
                 print(f"[run.py] visualization video saved to: {out_video}", flush=True)
             except Exception as e:
-                print(f"[run.py] Video encoding failed/skipped: {e}", flush=True)
+                # print(f"[run.py] Video encoding failed/skipped: {e}", flush=True)
+                pass
 
     return
 
