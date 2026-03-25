@@ -2,6 +2,7 @@ from enum import Enum
 import numpy as np
 import torch
 import os
+from tqdm import tqdm
 
 from isaacgym import gymtorch
 from isaacgym import gymapi
@@ -67,9 +68,8 @@ class InterMimic(Humanoid_SMPLX):
                 ]
             )
 
-            # Preserve existing behavior: during replay/debug, only use the first motion.
-            # (When `--motion_file` is provided, we bypass this branch.)
-            self.motion_file = [self.motion_file[0]]  # nhj warn
+            # [nhj warn] for debugging
+            # self.motion_file = [self.motion_file[0]]  # nhj warn [must remove]
 
         self.object_name = [
             os.path.basename(motion_example).split('_')[-2] for motion_example in self.motion_file
@@ -1219,6 +1219,7 @@ class InterMimic(Humanoid_SMPLX):
     def render(self, sync_frame_time=False, t=0):
         super().render(sync_frame_time)
 
+
         if self.viewer:
             if self.save_images:
                 env_ids = 0
@@ -1265,6 +1266,38 @@ class InterMimic(Humanoid_SMPLX):
                     images_dir = resolve_data_path("images", dataname, must_exist=False)
                     images_dir.mkdir(parents=True, exist_ok=True)
                 rgb_filename = images_dir / ("rgb_env%d_frame%05d.png" % (env_ids, frame_id))
+
+                # tqdm progress bar (lazy init). We save only env 0.
+                if env_ids == 0 and tqdm is not None:
+                    if getattr(self, "_tqdm_pbar", None) is None:
+                        # Best-effort total: episode length if available.
+                        total = None
+                        try:
+                            if hasattr(self, "max_episode_length") and hasattr(self, "data_id"):
+                                total = int(self.max_episode_length[self.data_id[env_ids]].item())
+                        except Exception:
+                            total = None
+                        self._tqdm_pbar = tqdm(total=total, desc="[rendering]", unit="frame")
+                        self._tqdm_last_frame_id = frame_id
+
+                    # Detect episode reset / loop: frame_id decreases.
+                    if getattr(self, "_tqdm_last_frame_id", None) is not None and frame_id < self._tqdm_last_frame_id:
+                        try:
+                            self._tqdm_pbar.close()
+                        except Exception:
+                            pass
+                        self._tqdm_pbar = tqdm(total=None, desc="[intermimic] rendering", unit="frame")
+                        self._tqdm_last_frame_id = frame_id
+
+                    # Update by delta (frame_id is the current timestep).
+                    last_id = getattr(self, "_tqdm_last_frame_id", frame_id)
+                    delta = max(0, frame_id - last_id)
+                    if delta > 0:
+                        self._tqdm_pbar.update(delta)
+                    self._tqdm_last_frame_id = frame_id
+                elif env_ids == 0 and tqdm is None and frame_id % 10 == 0:
+                    # Fallback: if tqdm is not installed.
+                    print(f"Saving frame frame_id={frame_id}", flush=True)
                 self.gym.write_viewer_image_to_file(self.viewer, str(rgb_filename))
         return
 

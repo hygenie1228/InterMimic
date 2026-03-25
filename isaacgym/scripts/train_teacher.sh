@@ -16,4 +16,4 @@ python -m intermimic.run \
     --cfg_env isaacgym/src/intermimic/data/cfg/omomo_train.yaml \
     --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo.yaml \
     --headless \
-    --output checkpoints
+    --output /home/namhj/InterMimic/exp/sub2/checkpoints

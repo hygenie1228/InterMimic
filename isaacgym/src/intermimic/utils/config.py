@@ -223,6 +223,8 @@ def get_args(benchmark=False):
             "help": "Init the object velocity at the first frame"},
         {"name": "--save_images", "action": "store_true", "default": False,
             "help": "save images for viewer"},
+        {"name": "--exp_dir", "type": str, "default": "",
+            "help": "Optional exp directory under InterMimic/exp used for frame output and video encoding."},
         {"name": "--num_envs", "type": int, "default": 0,
             "help": "Number of environments to create - override config file"},
         {"name": "--episode_length", "type": int, "default": 0,

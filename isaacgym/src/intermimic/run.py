@@ -27,10 +27,13 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import os
+import glob
+import subprocess
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 from .utils.config import set_np_formatting, set_seed, get_args, parse_sim_params, load_cfg
 from .utils.parse_task import parse_task
+from .utils.path_utils import resolve_repo_path
 
 from rl_games.algos_torch import torch_ext
 from rl_games.common import env_configurations, vecenv
@@ -49,6 +52,54 @@ from .learning import intermimic_network_builder
 args = None
 cfg = None
 cfg_train = None
+
+
+def _normalize_exp_override(exp_dir: str) -> str:
+    """
+    Match intermimic task render logic:
+    - accept "exp/foo", "foo", "/abs/.../exp/foo"
+    - keep only "foo"
+    """
+    exp_dir = exp_dir.strip().strip("/")
+    if "/exp/" in exp_dir:
+        exp_dir = exp_dir.split("/exp/", 1)[1]
+    if exp_dir.startswith("exp/"):
+        exp_dir = exp_dir[len("exp/") :]
+    return exp_dir
+
+
+def _encode_visualization_video_from_frames(exp_dir: str, fps: float, env_id: int = 0) -> str:
+    """Encode rgb_env{env_id}_frame*.png into exp/{exp_dir}/visualization.mp4."""
+    exp_override = _normalize_exp_override(exp_dir)
+    exp_root = resolve_repo_path("exp", must_exist=False)
+    images_dir = exp_root / exp_override / "images"
+    if not images_dir.is_dir():
+        raise FileNotFoundError(f"Images dir not found: {images_dir}")
+
+    pattern = os.path.join(str(images_dir), f"rgb_env{env_id}_frame*.png")
+    if not glob.glob(pattern):
+        raise FileNotFoundError(f"No frames found for ffmpeg: {pattern}")
+
+    video_out = exp_root / exp_override / "visualization.mp4"
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        "error",
+        "-framerate",
+        str(fps),
+        "-pattern_type",
+        "glob",
+        "-i",
+        pattern,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(video_out),
+    ]
+    subprocess.run(ffmpeg_cmd, check=True)
+    return str(video_out)
 
 def create_rlgpu_env(**kwargs):
     """
@@ -222,6 +273,15 @@ def main():
     args = get_args()
     cfg, cfg_train, logdir = load_cfg(args)
 
+    # Saving frames requires an actual viewer in this codebase.
+    # Even if --headless is set, we force headless=false when --save_images is requested.
+    if getattr(args, "save_images", False):
+        cfg["headless"] = False
+
+    # Task render code checks EXP_DIR env var; expose CLI --exp_dir to it.
+    if getattr(args, "exp_dir", "").strip():
+        os.environ["EXP_DIR"] = args.exp_dir.strip()
+
     cfg_train['params']['seed'] = set_seed(cfg_train['params'].get("seed", -1), cfg_train['params'].get("torch_deterministic", False))
 
     cfg_train['params']['config']['multi_gpu'] = args.multi_gpu
@@ -275,7 +335,31 @@ def main():
     runner = build_alg_runner(algo_observer)
     runner.load(cfg_train)
     runner.reset()
-    runner.run(vargs)
+    try:
+        # Best-effort cleanup so video encoding doesn't include stale frames.
+        if getattr(args, "test", False) and getattr(args, "save_images", False) and getattr(args, "exp_dir", "").strip():
+            exp_override = _normalize_exp_override(args.exp_dir.strip())
+            exp_root = resolve_repo_path("exp", must_exist=False)
+            images_dir = exp_root / exp_override / "images"
+            frame_glob = os.path.join(str(images_dir), "rgb_env0_frame*.png")
+            if images_dir.is_dir() and glob.glob(frame_glob):
+                for p in glob.glob(frame_glob):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+
+        runner.run(vargs)
+    finally:
+        # Encode after the test run completes.
+        if getattr(args, "test", False) and getattr(args, "save_images", False) and getattr(args, "exp_dir", "").strip():
+            try:
+                env_cfg = cfg.get("env", {}) if isinstance(cfg, dict) else {}
+                fps = float(env_cfg.get("dataFPS", 30.0))
+                out_video = _encode_visualization_video_from_frames(args.exp_dir.strip(), fps=fps, env_id=0)
+                print(f"[run.py] visualization video saved to: {out_video}", flush=True)
+            except Exception as e:
+                print(f"[run.py] Video encoding failed/skipped: {e}", flush=True)
 
     return
 
