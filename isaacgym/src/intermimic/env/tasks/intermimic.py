@@ -44,9 +44,36 @@ class InterMimic(Humanoid_SMPLX):
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
         if cfg['env'].get('enableEvaluation', False) and not state_init_is_start:
             print(f"Warning: Evaluation is disabled because stateInit is '{state_init}' (must be 'Start')")
-        motion_file = os.listdir(self.motion_file)
-        self.motion_file = sorted([os.path.join(self.motion_file, data_path) for data_path in motion_file if data_path.split('_')[0] in cfg['env']['dataSub']])
-        self.object_name = [motion_example.split('_')[-2] for motion_example in self.motion_file]
+
+        # `cfg['env']['motion_file']` can be either:
+        # - a directory containing many `.pt` motions (legacy behavior)
+        # - a single `.pt` file path (single-motion replay mode)
+        motion_path_or_dir = self.motion_file
+        if os.path.isfile(motion_path_or_dir):
+            motion_basename = os.path.basename(motion_path_or_dir)
+            if motion_basename.split('_')[0] in cfg['env']['dataSub']:
+                self.motion_file = [motion_path_or_dir]
+            else:
+                raise RuntimeError(
+                    f"[InterMimic] Provided motion file does not match dataSub filter: {motion_path_or_dir}"
+                )
+        else:
+            motion_file = os.listdir(motion_path_or_dir)
+            self.motion_file = sorted(
+                [
+                    os.path.join(motion_path_or_dir, data_path)
+                    for data_path in motion_file
+                    if data_path.split('_')[0] in cfg['env']['dataSub']
+                ]
+            )
+
+            # Preserve existing behavior: during replay/debug, only use the first motion.
+            # (When `--motion_file` is provided, we bypass this branch.)
+            self.motion_file = [self.motion_file[0]]  # nhj warn
+
+        self.object_name = [
+            os.path.basename(motion_example).split('_')[-2] for motion_example in self.motion_file
+        ]
         object_name_set = sorted(list(set(self.object_name)))
         # Construct device string before super().__init__() since self.device is set there
         if device_type == "cuda" or device_type == "GPU":
@@ -99,6 +126,7 @@ class InterMimic(Humanoid_SMPLX):
         return
 
     def _load_motion(self, motion_file, startk=0, topk=1, initk=0):
+        # [nhj warn] Important!: motion loading
 
         hoi_datas = []
         hoi_refs = []

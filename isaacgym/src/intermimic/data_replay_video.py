@@ -9,6 +9,8 @@ import shutil
 from datetime import datetime
 from typing import List
 
+import torch
+
 from intermimic.utils.path_utils import resolve_data_path, resolve_repo_path
 
 
@@ -84,6 +86,11 @@ def main() -> None:
     parser.add_argument("--num_envs", type=int, default=16)
     parser.add_argument("--env_id", type=int, default=int(os.environ.get("ENV_ID", 0)))
 
+    parser.add_argument(
+        "--motion_file",
+        default="",
+        help="Optional single motion .pt file path (relative to repo root or absolute). When set, only this motion is replayed.",
+    )
     parser.add_argument("--min_frames", type=int, default=_env_int("MIN_FRAMES", 300))
     parser.add_argument("--frame_timeout_sec", type=int, default=_env_int("FRAME_TIMEOUT_SEC", 180))
     parser.add_argument("--fps", type=float, default=_env_float("FPS", 30.0))
@@ -96,6 +103,30 @@ def main() -> None:
     parser.add_argument("--out_video", default="", help="Optional explicit output mp4 path.")
 
     args = parser.parse_args()
+
+    expected_motion_frames = None
+    if args.motion_file.strip():
+        motion_path = resolve_repo_path(args.motion_file.strip(), must_exist=True)
+        # Ensure downstream code (task) sees the correct absolute path.
+        args.motion_file = str(motion_path)
+        motion_obj = torch.load(str(motion_path), map_location="cpu")
+        # InterMimic expects the motion file to be a tensor-like object where shape[0] is #frames.
+        if hasattr(motion_obj, "shape") and motion_obj.shape:
+            expected_motion_frames = int(motion_obj.shape[0])
+        else:
+            raise RuntimeError(f"[data_replay_video] Unsupported motion file contents: {motion_path}")
+
+        if expected_motion_frames <= 0:
+            raise RuntimeError(f"[data_replay_video] Invalid motion frame count: {expected_motion_frames} for {motion_path}")
+
+        # When a single motion is requested, always render until its last frame.
+        args.min_frames = expected_motion_frames
+        # Add extra slack for simulator startup, saving, etc.
+        args.frame_timeout_sec = max(args.frame_timeout_sec, int(expected_motion_frames / max(args.fps, 1e-6) + 60))
+        print(
+            f"[data_replay_video] Single-motion mode enabled: {motion_path} frames={expected_motion_frames}",
+            flush=True,
+        )
 
     # Save output under repo-root `exp/` (e.g., /home/.../InterMimic/exp/debug).
     exp_root = resolve_repo_path("exp", must_exist=False)
@@ -147,9 +178,14 @@ def main() -> None:
         "--num_envs",
         str(args.num_envs),
     ]
+    if args.motion_file.strip():
+        cmd += ["--motion_file", args.motion_file.strip()]
 
     print("[data_replay_video] Starting replay subprocess ...", flush=True)
     child_env = os.environ.copy()
+    if args.exp_dir.strip():
+        # `intermimic.py` (task render) uses EXP_DIR env var to decide where to save frames.
+        child_env["EXP_DIR"] = args.exp_dir.strip()
     proc = subprocess.Popen(cmd, stdout=None, stderr=None, env=child_env)
 
     start = time.time()
@@ -238,9 +274,19 @@ def main() -> None:
             except Exception:
                 pass
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Store the video alongside the frames directory.
-    out_video = args.out_video or os.path.join(image_dir, f"data_replay_{timestamp}.mp4")
+    # Store the mp4 one level above `.../images/` (i.e. exp/{exp_dir}/data_replay_*.mp4).
+    video_dir = image_dir
+    if exp_dir:
+        video_dir = os.path.join(str(exp_root), exp_dir)
+        os.makedirs(video_dir, exist_ok=True)
+
+    if args.out_video:
+        out_video = args.out_video
+    elif args.motion_file.strip():
+        motion_basename = os.path.splitext(os.path.basename(args.motion_file.strip()))[0]
+        out_video = os.path.join(video_dir, f"data_replay.mp4")
+    else:
+        out_video = os.path.join(video_dir, f"data_replay.mp4")
 
     # Encode with ffmpeg using glob input.
     ffmpeg_cmd = [
@@ -267,6 +313,27 @@ def main() -> None:
         raise RuntimeError(f"[data_replay_video] ffmpeg failed with code {completed.returncode}")
 
     print(f"[data_replay_video] Video saved to: {out_video}", flush=True)
+
+    # Cleanup frames directory after successful render.
+    # Keep the mp4 under exp/{exp_dir}/data_replay_*.mp4.
+    # User request: delete the `images` folder itself.
+    if exp_dir and os.path.isdir(image_dir):
+        try:
+            # Safety: only delete directories that end with `/images`.
+            if os.path.basename(image_dir) == "images":
+                shutil.rmtree(image_dir, ignore_errors=True)
+            else:
+                # Fallback: best-effort delete frame PNGs only.
+                frame_glob_cleanup = os.path.join(image_dir, f"rgb_env{args.env_id}_frame*.png")
+                cleanup_files = glob.glob(frame_glob_cleanup, recursive=True)
+                for p in cleanup_files:
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+        except Exception:
+            # Never fail the whole pipeline because cleanup failed.
+            pass
 
 
 if __name__ == "__main__":
