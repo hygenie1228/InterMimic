@@ -220,17 +220,22 @@ class InterMimicAgent(common_agent.CommonAgent):
                 global_curr_frames = curr_frames * (self.world_size if self.multi_gpu else 1)
                 self.frame += global_curr_frames
 
+                elapsed_s = time.time() - start_time
+
                 if self.print_stats:
                     fps_step = global_curr_frames / scaled_play_time
                     fps_total = global_curr_frames / scaled_time
                     print(
-                        f"epoch_num:{epoch_num} mean_rewards:{self._get_mean_rewards()} "
+                        f"epoch:{epoch_num}/{int(self.max_epochs)} mean_rewards:{self._get_mean_rewards()} "
+                        f"elapsed: {elapsed_s / 3600:.2f}h "
                         f"fps step: {fps_step:.1f} fps total: {fps_total:.1f}"
                     )
 
                 self.writer.add_scalar('performance/total_fps', global_curr_frames / scaled_time, self.frame)
                 self.writer.add_scalar('performance/step_fps',  global_curr_frames / scaled_play_time, self.frame)
                 self.writer.add_scalar('info/epochs', epoch_num, self.frame)
+                self.writer.add_scalar('info/max_epochs', self.max_epochs, self.frame)
+                self.writer.add_scalar('info/elapsed_hours', elapsed_s / 3600, self.frame)
                 self._log_train_info(train_info, self.frame)
 
                 self.algo_observer.after_print_stats(self.frame, epoch_num, total_time)

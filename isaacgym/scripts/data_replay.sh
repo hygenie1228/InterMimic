@@ -12,7 +12,7 @@ export PYTHONPATH="$REPO_ROOT/isaacgym/src:$REPO_ROOT:$PYTHONPATH"
 
 SEQ_NAME="sub2_largetable_000"
 EXP_DIR="/home/namhj/InterMimic/exp/${SEQ_NAME}"
-MOTION_FILE="/home/namhj/InterMimic/InterAct/OMOMO/${SEQ_NAME}.pt"
+MOTION_FILE="/home/namhj/InterMimic/InterAct/OMOMO_new/${SEQ_NAME}.pt"
 
 xvfb-run -a \
   python -m intermimic.data_replay_video \
