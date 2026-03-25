@@ -1,0 +1,5 @@
+# Data Replay
+sh isaacgym/scripts/data_replay.sh
+./isaaclab/scripts/run_data_replay.sh --num-envs 8 --motion-dir InterAct/OMOMO_new
+
+# Teacher Training
