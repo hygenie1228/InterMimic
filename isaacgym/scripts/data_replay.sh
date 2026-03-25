@@ -8,13 +8,15 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/../.." && pwd)"
-
 export PYTHONPATH="$REPO_ROOT/isaacgym/src:$REPO_ROOT:$PYTHONPATH"
 
-python -m intermimic.run \
+EXP_DIR="/home/namhj/InterMimic/exp/debug"
+export EXP_DIR
+xvfb-run -a \
+  python -m intermimic.data_replay_video \
     --task InterMimic \
     --cfg_env isaacgym/src/intermimic/data/cfg/omomo_test.yaml \
     --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo.yaml \
-    --test \
-    --play_dataset \
-    --num_envs 16
+    --num_envs 16 \
+    --env_id 0 \
+    --exp_dir "${EXP_DIR}"

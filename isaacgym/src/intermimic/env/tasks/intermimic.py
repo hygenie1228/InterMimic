@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from .humanoid import *
 import trimesh
 
-from ...utils.path_utils import resolve_data_path
+from ...utils.path_utils import resolve_data_path, resolve_repo_path
 
 
 
@@ -1195,12 +1195,47 @@ class InterMimic(Humanoid_SMPLX):
             if self.save_images:
                 env_ids = 0
                 if self.play_dataset:
-                    frame_id = t
+                    # In play_dataset mode, `t` can be a tensor (per-env timestep).
+                    # We save only env 0, so convert the corresponding element to int.
+                    if torch.is_tensor(t):
+                        if t.numel() == 1:
+                            frame_id = int(t.item())
+                        else:
+                            frame_id = int(t[0].item())
+                    else:
+                        frame_id = int(t)
                 else:
-                    frame_id = self.progress_buf[env_ids]
+                    frame_id = int(self.progress_buf[env_ids].item())
                 dataname = self.motion_file[-1][6:-3]
-                images_dir = resolve_data_path("images", dataname, must_exist=False)
-                images_dir.mkdir(parents=True, exist_ok=True)
+
+                # Save output frames/video under:
+                #   /home/.../InterMimic/exp/<EXP_DIR>/images
+                # where EXP_DIR can be passed as env var from scripts.
+                exp_override = os.environ.get("EXP_DIR", "").strip()
+                if exp_override:
+                    # Accept either:
+                    #   "exp/debug", "debug"
+                    #   "/abs/path/to/exp/debug"
+                    if "/exp/" in exp_override:
+                        exp_override = exp_override.split("/exp/", 1)[1]
+                    exp_override = exp_override.strip().strip("/")
+                    if exp_override.startswith("exp/"):
+                        exp_override = exp_override[len("exp/") :]
+
+                images_dir = None
+                if exp_override:
+                    try:
+                        exp_base = resolve_repo_path("exp", must_exist=False)
+                        images_dir = exp_base / exp_override / "images"
+                        images_dir.mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        # Fallback to legacy location if exp/ is not writable.
+                        images_dir = resolve_data_path("images", dataname, must_exist=False)
+                        images_dir.mkdir(parents=True, exist_ok=True)
+                else:
+                    # Save frames under the original task path.
+                    images_dir = resolve_data_path("images", dataname, must_exist=False)
+                    images_dir.mkdir(parents=True, exist_ok=True)
                 rgb_filename = images_dir / ("rgb_env%d_frame%05d.png" % (env_ids, frame_id))
                 self.gym.write_viewer_image_to_file(self.viewer, str(rgb_filename))
         return
