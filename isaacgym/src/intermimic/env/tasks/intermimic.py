@@ -2,6 +2,7 @@ from enum import Enum
 import numpy as np
 import torch
 import os
+import subprocess
 from tqdm import tqdm
 
 from isaacgym import gymtorch
@@ -40,6 +41,9 @@ class InterMimic(Humanoid_SMPLX):
         self.more_rigid = cfg['env']['moreRigid']
         self.rollout_length = cfg['env']['rolloutLength']
         self.psi = cfg['env'].get('physicalBufferSize', 1)
+        self.num_episode = int(cfg['env'].get('numEpisode', 0))
+        self._saved_episode_count = 0
+        self._episode_stop_requested = False
         # Evaluation only works with stateInit "Start"
         state_init_is_start = (state_init == "Start")
         self.enable_evaluation = cfg['env'].get('enableEvaluation', False) and state_init_is_start
@@ -1236,6 +1240,14 @@ class InterMimic(Humanoid_SMPLX):
                 else:
                     frame_id = int(self.progress_buf[env_ids].item())
                 dataname = self.motion_file[-1][6:-3]
+                if not hasattr(self, "_render_episode_idx"):
+                    self._render_episode_idx = 0
+                if not hasattr(self, "_render_last_frame_id"):
+                    self._render_last_frame_id = -1
+                if not hasattr(self, "_render_active_episode_idx"):
+                    self._render_active_episode_idx = 0
+                if not hasattr(self, "_render_current_images_dir"):
+                    self._render_current_images_dir = None
 
                 # Save output frames/video under:
                 #   /home/.../InterMimic/exp/<EXP_DIR>/images
@@ -1265,6 +1277,29 @@ class InterMimic(Humanoid_SMPLX):
                     # Save frames under the original task path.
                     images_dir = resolve_data_path("images", dataname, must_exist=False)
                     images_dir.mkdir(parents=True, exist_ok=True)
+
+                # Track episode boundaries and write each episode
+                # to its own image folder so frame names never collide.
+                episode_reset = (
+                    self._render_last_frame_id >= 0 and frame_id < self._render_last_frame_id
+                )
+                if episode_reset:
+                    did_finalize = self._finalize_episode_video(env_ids, exp_override)
+                    if did_finalize:
+                        self._saved_episode_count += 1
+                        self._render_episode_idx += 1
+                        self._render_active_episode_idx = self._render_episode_idx
+                        if self.num_episode > 0 and self._saved_episode_count >= self.num_episode:
+                            self._episode_stop_requested = True
+                            print(
+                                f"[intermimic] reached num_episode={self.num_episode}, stopping visualization loop.",
+                                flush=True,
+                            )
+
+                images_dir = images_dir / ("episode_%05d" % self._render_active_episode_idx)
+                images_dir.mkdir(parents=True, exist_ok=True)
+                self._render_current_images_dir = images_dir
+
                 rgb_filename = images_dir / ("rgb_env%d_frame%05d.png" % (env_ids, frame_id))
 
                 # tqdm progress bar (lazy init). We save only env 0.
@@ -1286,7 +1321,7 @@ class InterMimic(Humanoid_SMPLX):
                             self._tqdm_pbar.close()
                         except Exception:
                             pass
-                        self._tqdm_pbar = tqdm(total=None, desc="[intermimic] rendering", unit="frame")
+                        self._tqdm_pbar = tqdm(total=None, desc="[rendering]", unit="frame")
                         self._tqdm_last_frame_id = frame_id
 
                     # Update by delta (frame_id is the current timestep).
@@ -1299,7 +1334,69 @@ class InterMimic(Humanoid_SMPLX):
                     # Fallback: if tqdm is not installed.
                     print(f"Saving frame frame_id={frame_id}", flush=True)
                 self.gym.write_viewer_image_to_file(self.viewer, str(rgb_filename))
+
+                self._render_last_frame_id = frame_id
         return
+
+    def _finalize_episode_video(self, env_ids, exp_override):
+        image_dir = getattr(self, "_render_current_images_dir", None)
+        if image_dir is None:
+            return False
+        frame_pattern = str(image_dir / ("rgb_env%d_frame*.png" % env_ids))
+        try:
+            import glob
+            frames = glob.glob(frame_pattern)
+        except Exception:
+            frames = []
+        if not frames:
+            self._render_current_images_dir = None
+            return False
+        # Guard against spurious one-frame videos from transient resets.
+        if len(frames) < 2:
+            return False
+
+        video_dir = image_dir.parent
+        if exp_override:
+            try:
+                exp_base = resolve_repo_path("exp", must_exist=False)
+                video_dir = exp_base / exp_override
+                video_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+        out_video = video_dir / ("vis_ep%05d.mp4" % self._render_active_episode_idx)
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-pattern_type",
+            "glob",
+            "-i",
+            frame_pattern,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(out_video),
+        ]
+        try:
+            completed = subprocess.run(ffmpeg_cmd, check=False)
+            if completed.returncode == 0:
+                print(f"[intermimic] saved episode video: {out_video}", flush=True)
+                encoded_ok = True
+            else:
+                print(
+                    f"[intermimic] warning: ffmpeg failed for episode {self._render_active_episode_idx}",
+                    flush=True,
+                )
+                encoded_ok = False
+        except Exception as e:
+            print(f"[intermimic] warning: failed to encode episode video: {e}", flush=True)
+            encoded_ok = False
+        self._render_current_images_dir = None
+        return encoded_ok
 
     def print_final_eval_summary(self):
         """Print final evaluation summary at the end of inference"""

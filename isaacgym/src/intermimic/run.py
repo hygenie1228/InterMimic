@@ -315,6 +315,9 @@ def main():
 
     if args.save_images:
         cfg['env']['saveImages'] = True
+
+    if getattr(args, "num_episode", 0) > 0:
+        cfg['env']['numEpisode'] = int(args.num_episode)
     
     if args.init_vel:
         cfg['env']['initVel'] = True

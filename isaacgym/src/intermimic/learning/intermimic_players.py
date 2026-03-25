@@ -88,6 +88,8 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
             else:
                 # inference
                 for n in range(self.max_steps):
+                    if getattr(self.env.task, "_episode_stop_requested", False):
+                        break
                     obs_dict = self.env_reset(done_indices)
 
                     if has_masks:
@@ -141,6 +143,9 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
                             break
                     
                     done_indices = done_indices[:, 0]
+
+                if getattr(self.env.task, "_episode_stop_requested", False):
+                    break
 
         # Print final evaluation summary if evaluation is enabled
         if hasattr(self.env.task, 'print_final_eval_summary'):
