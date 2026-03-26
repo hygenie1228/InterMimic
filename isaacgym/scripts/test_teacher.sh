@@ -13,6 +13,8 @@ export PYTHONPATH="$REPO_ROOT/isaacgym/src:$REPO_ROOT:$PYTHONPATH"
 SEQ_NAME="reproduce"
 EXP_DIR="/home/namhj/InterMimic/exp/${SEQ_NAME}"
 CKPT_PATH="/home/namhj/InterMimic/exp/${SEQ_NAME}/checkpoints/sub2.pth"
+NUM_EPISODE=4
+NUM_ENVS=1
 
 xvfb-run -a \
   python -m intermimic.run \
@@ -23,6 +25,7 @@ xvfb-run -a \
     --exp_dir ${EXP_DIR} \
     --checkpoint ${CKPT_PATH} \
     --save_images \
-    --num_episode 4 \
-    --num_envs 16 \
-    --visualize
+    --num_episode ${NUM_EPISODE} \
+    --num_envs ${NUM_ENVS} \
+    --visualize \
+    --motion_file /home/namhj/InterMimic/InterAct/OMOMO_new/sub2_largetable_000.pt

@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import os
 import subprocess
+import shutil
 from tqdm import tqdm
 
 from isaacgym import gymtorch
@@ -1386,6 +1387,16 @@ class InterMimic(Humanoid_SMPLX):
             if completed.returncode == 0:
                 print(f"[intermimic] saved episode video: {out_video}", flush=True)
                 encoded_ok = True
+                # Free disk usage incrementally: remove rendered frames
+                # for this episode as soon as the video is encoded.
+                try:
+                    shutil.rmtree(image_dir, ignore_errors=True)
+                    # Best-effort cleanup of now-empty parent images dir.
+                    parent_images_dir = image_dir.parent
+                    if parent_images_dir.exists() and not any(parent_images_dir.iterdir()):
+                        parent_images_dir.rmdir()
+                except Exception as e:
+                    print(f"[intermimic] warning: failed to cleanup frames: {e}", flush=True)
             else:
                 print(
                     f"[intermimic] warning: ffmpeg failed for episode {self._render_active_episode_idx}",

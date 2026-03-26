@@ -29,6 +29,7 @@
 import os
 import glob
 import subprocess
+import shutil
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 from .utils.config import set_np_formatting, set_seed, get_args, parse_sim_params, load_cfg
@@ -340,18 +341,15 @@ def main():
     runner.load(cfg_train)
     runner.reset()
     try:
-        # Best-effort cleanup so video encoding doesn't include stale frames.
         if getattr(args, "test", False) and do_visualize and getattr(args, "exp_dir", "").strip():
             exp_override = _normalize_exp_override(args.exp_dir.strip())
             exp_root = resolve_repo_path("exp", must_exist=False)
             images_dir = exp_root / exp_override / "images"
-            frame_glob = os.path.join(str(images_dir), "rgb_env0_frame*.png")
-            if images_dir.is_dir() and glob.glob(frame_glob):
-                for p in glob.glob(frame_glob):
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
+            if images_dir.is_dir():
+                try:
+                    shutil.rmtree(images_dir)
+                except Exception:
+                    pass
 
         runner.run(vargs)
     finally:
