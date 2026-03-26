@@ -35,6 +35,14 @@ class InterMimic(Humanoid_SMPLX):
         self._reset_ref_env_ids = []
         self.motion_file = cfg['env']['motion_file']
         self.play_dataset = cfg['env']['playdataset']
+        self.play_dataset_physics = cfg['env'].get('playdatasetPhysics', False)
+        self.object_mode = cfg['env'].get('objectMode', 'kinematic')
+        self.root_track_mode = cfg['env'].get('rootTrackMode', 'hard')
+        self.dataset_contact_overlay = cfg['env'].get('datasetContactOverlay', True)
+        if self.object_mode not in ('kinematic', 'dynamic'):
+            raise ValueError(f"Unsupported objectMode: {self.object_mode} (expected 'kinematic' or 'dynamic')")
+        if self.root_track_mode not in ('hard', 'off'):
+            raise ValueError(f"Unsupported rootTrackMode: {self.root_track_mode} (expected 'hard' or 'off')")
         self.reward_weights = cfg["env"]["rewardWeights"]
         self.save_images = cfg['env']['saveImages']
         self.init_vel = cfg['env']['initVel']
@@ -1145,7 +1153,6 @@ class InterMimic(Humanoid_SMPLX):
         return rcg, contact_reset
     
     def play_dataset_step(self, time):
-
         t = time
         if t == 0:
             self.data_id = to_torch([torch.where(self.obj2motion[i % len(self.object_name)] == 1)[0][torch.randint(self.obj2motion[i % len(self.object_name)].sum(), ())] for i in range(self.num_envs)], device=self.device, dtype=torch.long)
@@ -1158,41 +1165,89 @@ class InterMimic(Humanoid_SMPLX):
                 device=self.device,
                 dtype=torch.long
             )
-        ### update object ###
+
+        self._refresh_sim_tensors()
+
+        # Always keep reference object trajectory for observation/debug rendering.
         self._target_states[env_ids, :3] = self.extract_data_component('obj_pos', True, self.data_id[env_ids], t)
         self._target_states[env_ids, 3:7] = self.extract_data_component('obj_rot', True, self.data_id[env_ids], t)
         self._target_states[env_ids, 7:10] = torch.zeros_like(self._target_states[env_ids, 7:10])
         self._target_states[env_ids, 10:13] = torch.zeros_like(self._target_states[env_ids, 10:13])
 
-        ### update subject ###   
-        _humanoid_root_pos = self.extract_data_component('root_pos', True, self.data_id[env_ids], t)
-        _humanoid_root_rot = self.extract_data_component('root_rot', True, self.data_id[env_ids], t)
-        self._humanoid_root_states[env_ids, 0:3] = _humanoid_root_pos
-        self._humanoid_root_states[env_ids, 3:7] = _humanoid_root_rot
-        self._humanoid_root_states[:, 7:10] = torch.zeros_like(self._humanoid_root_states[:, 7:10])
-        self._humanoid_root_states[:, 10:13] = torch.zeros_like(self._humanoid_root_states[:, 10:13])
-        
-        self._dof_pos[env_ids] = self.extract_data_component('dof_pos', True, self.data_id[env_ids], t)
-        self._dof_vel[env_ids] = self.extract_data_component('dof_vel', True, self.data_id[env_ids], t)
+        if not self.play_dataset_physics:
+            # Legacy replay: directly teleport humanoid/object states to reference each frame.
+            _humanoid_root_pos = self.extract_data_component('root_pos', True, self.data_id[env_ids], t)
+            _humanoid_root_rot = self.extract_data_component('root_rot', True, self.data_id[env_ids], t)
+            self._humanoid_root_states[env_ids, 0:3] = _humanoid_root_pos
+            self._humanoid_root_states[env_ids, 3:7] = _humanoid_root_rot
+            self._humanoid_root_states[:, 7:10] = torch.zeros_like(self._humanoid_root_states[:, 7:10])
+            self._humanoid_root_states[:, 10:13] = torch.zeros_like(self._humanoid_root_states[:, 10:13])
 
+            self._dof_pos[env_ids] = self.extract_data_component('dof_pos', True, self.data_id[env_ids], t)
+            self._dof_vel[env_ids] = self.extract_data_component('dof_vel', True, self.data_id[env_ids], t)
 
-        env_ids_int32 = self._humanoid_actor_ids[env_ids]
-        self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self._root_states),
-                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-        self.gym.set_dof_state_tensor_indexed(self.sim,
-                                              gymtorch.unwrap_tensor(self._dof_state),
-                                              gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-        
-        env_ids_int32 = self._tar_actor_ids[env_ids]
-        self.gym.set_actor_root_state_tensor_indexed(self.sim, gymtorch.unwrap_tensor(self._root_states),
-                                                    gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+            env_ids_int32 = self._humanoid_actor_ids[env_ids]
+            self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                        gymtorch.unwrap_tensor(self._root_states),
+                                                        gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+            self.gym.set_dof_state_tensor_indexed(self.sim,
+                                                gymtorch.unwrap_tensor(self._dof_state),
+                                                gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
 
+            env_ids_int32 = self._tar_actor_ids[env_ids]
+            self.gym.set_actor_root_state_tensor_indexed(self.sim, gymtorch.unwrap_tensor(self._root_states),
+                                                        gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+            self.render(t=t)
+            self.gym.simulate(self.sim)
+            self._refresh_sim_tensors()
+            if self.dataset_contact_overlay:
+                self._render_dataset_contact_overlay(env_ids, t)
+            return
+
+        # Physics replay: no policy inference, directly convert reference pose to PD actions.
+        if self.root_track_mode == 'hard':
+            _humanoid_root_pos = self.extract_data_component('root_pos', True, self.data_id[env_ids], t)
+            _humanoid_root_rot = self.extract_data_component('root_rot', True, self.data_id[env_ids], t)
+            self._humanoid_root_states[env_ids, 0:3] = _humanoid_root_pos
+            self._humanoid_root_states[env_ids, 3:7] = _humanoid_root_rot
+            self._humanoid_root_states[env_ids, 7:10] = torch.zeros_like(self._humanoid_root_states[env_ids, 7:10])
+            self._humanoid_root_states[env_ids, 10:13] = torch.zeros_like(self._humanoid_root_states[env_ids, 10:13])
+
+            env_ids_int32 = self._humanoid_actor_ids[env_ids]
+            self.gym.set_actor_root_state_tensor_indexed(
+                self.sim,
+                gymtorch.unwrap_tensor(self._root_states),
+                gymtorch.unwrap_tensor(env_ids_int32),
+                len(env_ids_int32),
+            )
+
+        if self.object_mode == 'kinematic' or t[0].item() == 0:
+            env_ids_int32 = self._tar_actor_ids[env_ids]
+            self.gym.set_actor_root_state_tensor_indexed(
+                self.sim,
+                gymtorch.unwrap_tensor(self._root_states),
+                gymtorch.unwrap_tensor(env_ids_int32),
+                len(env_ids_int32),
+            )
+
+        ref_dof_pos = self.extract_data_component('dof_pos', True, self.data_id[env_ids], t)
+        denom = torch.where(self._pd_action_scale.abs() > 1e-6, self._pd_action_scale, torch.ones_like(self._pd_action_scale))
+        actions = (ref_dof_pos - self._pd_action_offset) / denom
+        actions = torch.clamp(actions, -1.0, 1.0)
+        self.pre_physics_step(actions)
+
+        self.gym.simulate(self.sim)
         self._refresh_sim_tensors()
+        if self.dataset_contact_overlay:
+            self._render_dataset_contact_overlay(env_ids, t)
+        self.render(t=t)
+        return
+
+    def _render_dataset_contact_overlay(self, env_ids, t):
         obj_contact = self.extract_data_component('contact_obj', True, self.data_id[env_ids], t)
         obj_contact = torch.any(obj_contact > 0.1, dim=-1)
         human_contact = self.extract_data_component('contact_human', True, self.data_id[env_ids], t)
-        for env_id, env_ptr in enumerate(self.envs):
+        for env_id, _ in enumerate(self.envs):
             if env_id in env_ids:
                 env_ptr = self.envs[env_id]
                 handle = self._target_handles[env_id]
@@ -1203,7 +1258,7 @@ class InterMimic(Humanoid_SMPLX):
                 else:
                     self.gym.set_rigid_body_color(env_ptr, handle, 0, gymapi.MESH_VISUAL,
                                                 gymapi.Vec3(0., 0., 1.))
-                    
+
                 handle = self.humanoid_handles[env_id]
                 for j in range(self.num_bodies):
                     if human_contact[env_id, j] > 0.5:
@@ -1215,9 +1270,6 @@ class InterMimic(Humanoid_SMPLX):
                     else:
                         self.gym.set_rigid_body_color(env_ptr, handle, j, gymapi.MESH_VISUAL,
                                                     gymapi.Vec3(0., 0., 1.))
-        self.render(t=t)
-        self.gym.simulate(self.sim)
-
         return
     
 

@@ -299,6 +299,14 @@ def main():
 
     if args.play_dataset:
         cfg['env']['playdataset'] = True
+    if getattr(args, "play_dataset_physics", False):
+        cfg['env']['playdatasetPhysics'] = True
+    if getattr(args, "object_mode", ""):
+        cfg['env']['objectMode'] = args.object_mode
+    if getattr(args, "root_track_mode", ""):
+        cfg['env']['rootTrackMode'] = args.root_track_mode
+    if getattr(args, "disable_dataset_contact_overlay", False):
+        cfg['env']['datasetContactOverlay'] = False
 
     if args.projtype:
         cfg['env']['projtype'] = args.projtype
