@@ -10,11 +10,11 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/../.." && pwd)"
 export PYTHONPATH="$REPO_ROOT/isaacgym/src:$REPO_ROOT:$PYTHONPATH"
 
-SEQ_NAME="reproduce"
+SEQ_NAME="sub2"
 EXP_DIR="/home/namhj/InterMimic/exp/${SEQ_NAME}"
-CKPT_PATH="/home/namhj/InterMimic/exp/${SEQ_NAME}/checkpoints/sub2.pth"
+CKPT_PATH="/home/namhj/InterMimic/exp/${SEQ_NAME}/checkpoints/smplx/nn/mimic.pth"
 NUM_EPISODE=4
-NUM_ENVS=1
+NUM_ENVS=8
 
 xvfb-run -a \
   python -m intermimic.run \
