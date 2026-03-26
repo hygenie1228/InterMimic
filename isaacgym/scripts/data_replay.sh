@@ -1,6 +1,7 @@
 #!/bin/sh
 set -e
 
+export CUDA_VISIBLE_DEVICES=1
 export ISAACGYM_ROOT=/home/namhj/Isaac/IsaacGym
 export PYTHONPATH="$ISAACGYM_ROOT/python:$PYTHONPATH"
 export LD_LIBRARY_PATH="$ISAACGYM_ROOT/lib:$LD_LIBRARY_PATH"
@@ -19,7 +20,7 @@ xvfb-run -a \
     --task InterMimic \
     --cfg_env isaacgym/src/intermimic/data/cfg/omomo_test.yaml \
     --cfg_train isaacgym/src/intermimic/data/cfg/train/rlg/omomo.yaml \
-    --num_envs 16 \
+    --num_envs 1 \
     --env_id 0 \
     --exp_dir "${EXP_DIR}" \
     --motion_file "$MOTION_FILE"

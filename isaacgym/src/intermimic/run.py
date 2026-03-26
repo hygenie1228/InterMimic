@@ -273,7 +273,7 @@ def main():
     set_np_formatting()
     args = get_args()
     cfg, cfg_train, logdir = load_cfg(args)
-    do_visualize = getattr(args, "save_images", False) and getattr(args, "visualize", False)
+    do_visualize = getattr(args, "visualize", False)
 
     # Visualization requires an actual viewer in this codebase.
     # Even if --headless is set, we force headless=false only when visualization is requested.

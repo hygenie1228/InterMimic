@@ -72,7 +72,7 @@ sim:
     bounce_threshold_velocity: 0.2
     max_depenetration_velocity: 100.0
     default_buffer_size_multiplier: 20.0
-    max_gpu_contact_pairs: 8388608 # 34603008 # 8*1024*1024 # [nhj warn] to reduce memory usage
+    max_gpu_contact_pairs: 34603008 # 8*1024*1024
 
   flex:
     num_inner_iterations: 10

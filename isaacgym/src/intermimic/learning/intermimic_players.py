@@ -83,8 +83,14 @@ class InterMimicPlayerContinuous(common_player.CommonPlayer):
             if self.env.task.play_dataset:
                 # play dataset
                 while True:
-                    for t in range(self.env.task.max_episode_length.max()): 
-                        self.env.task.play_dataset_step(t) 
+                    if getattr(self.env.task, "_episode_stop_requested", False):
+                        break
+                    for t in range(self.env.task.max_episode_length.max()):
+                        if getattr(self.env.task, "_episode_stop_requested", False):
+                            break
+                        self.env.task.play_dataset_step(t)
+                if getattr(self.env.task, "_episode_stop_requested", False):
+                    break
             else:
                 # inference
                 for n in range(self.max_steps):

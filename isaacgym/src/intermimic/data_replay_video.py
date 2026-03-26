@@ -174,166 +174,22 @@ def main() -> None:
         args.cfg_train,
         "--test",
         "--play_dataset",
-        "--save_images",
+        "--visualize",
         "--num_envs",
         str(args.num_envs),
     ]
     if args.motion_file.strip():
         cmd += ["--motion_file", args.motion_file.strip()]
+        cmd += ["--num_episode", "1"]
 
     print("[data_replay_video] Starting replay subprocess ...", flush=True)
     child_env = os.environ.copy()
     if args.exp_dir.strip():
         # `intermimic.py` (task render) uses EXP_DIR env var to decide where to save frames.
         child_env["EXP_DIR"] = args.exp_dir.strip()
-    proc = subprocess.Popen(cmd, stdout=None, stderr=None, env=child_env)
-
-    start = time.time()
-    try:
-        selected_dir = ""
-        while True:
-            frames = glob.glob(frame_glob, recursive=True)
-            if frames:
-                # Group frames by directory to avoid mixing multiple sequences.
-                counts_by_dir = {}
-                for p in frames:
-                    d = os.path.dirname(p)
-                    counts_by_dir[d] = counts_by_dir.get(d, 0) + 1
-                selected_dir = max(counts_by_dir.keys(), key=lambda k: counts_by_dir[k])
-                if counts_by_dir[selected_dir] >= args.min_frames:
-                    print(
-                        "[data_replay_video] Selected directory for video encoding:",
-                        selected_dir,
-                        "frames:",
-                        counts_by_dir[selected_dir],
-                        flush=True,
-                    )
-                    break
-            if (time.time() - start) >= args.frame_timeout_sec:
-                print(
-                    f"[data_replay_video] Timeout after {args.frame_timeout_sec}s with {len(frames)} frames.",
-                    flush=True,
-                )
-                break
-            time.sleep(2.0)
-    finally:
-        _kill_process_tree(proc)
-
-    # After stopping, ensure we have a selected directory with frames.
-    if not selected_dir:
-        frames = sorted(glob.glob(frame_glob, recursive=True))
-        if not frames:
-            raise RuntimeError(f"[data_replay_video] ERROR: No frames found: {frame_glob}")
-        selected_dir = os.path.dirname(max(frames, key=lambda p: os.path.getmtime(p)))
-
-    image_dir = selected_dir
-    print(f"[data_replay_video] Encoding video from directory: {image_dir}", flush=True)
-
-    # Restrict to frames from the chosen directory.
-    image_dir_frames = sorted(glob.glob(os.path.join(image_dir, f"rgb_env{args.env_id}_frame*.png")))
-    if not image_dir_frames:
-        raise RuntimeError(f"[data_replay_video] ERROR: No frames found in picked directory: {image_dir}")
-
-    # Move frames into exp/{exp_dir} for user-controlled output location.
-    if exp_dir:
-        dest_dir = os.path.join(str(exp_root), exp_dir, "images")
-    else:
-        # If exp_dir isn't provided, keep frames where they are.
-        dest_dir = image_dir
-
-    print(
-        "[data_replay_video] Moving frames to:",
-        dest_dir,
-        "from:",
-        image_dir,
-        flush=True,
-    )
-
-    os.makedirs(dest_dir, exist_ok=True)
-    if dest_dir != image_dir:
-        if args.clear_old:
-            # Remove any previous frames in the destination folder so ffmpeg
-            # doesn't encode stale images.
-            for p in glob.glob(os.path.join(dest_dir, f"rgb_env{args.env_id}_frame*.png")):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
-        for src in image_dir_frames:
-            dst = os.path.join(dest_dir, os.path.basename(src))
-            shutil.move(src, dst)
-        image_dir = dest_dir
-
-    # Cleanup any leftover frames from legacy `images/` so output only remains under exp/{exp_dir}.
-    leftover = glob.glob(images_frame_glob, recursive=True)
-    if leftover:
-        print(f"[data_replay_video] Cleaning leftover frames under legacy images/: {len(leftover)}", flush=True)
-        for p in leftover:
-            try:
-                os.remove(p)
-            except Exception:
-                pass
-
-    # Store the mp4 one level above `.../images/` (i.e. exp/{exp_dir}/data_replay_*.mp4).
-    video_dir = image_dir
-    if exp_dir:
-        video_dir = os.path.join(str(exp_root), exp_dir)
-        os.makedirs(video_dir, exist_ok=True)
-
-    if args.out_video:
-        out_video = args.out_video
-    elif args.motion_file.strip():
-        motion_basename = os.path.splitext(os.path.basename(args.motion_file.strip()))[0]
-        out_video = os.path.join(video_dir, f"data_replay.mp4")
-    else:
-        out_video = os.path.join(video_dir, f"data_replay.mp4")
-
-    # Encode with ffmpeg using glob input.
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "error",
-        "-framerate",
-        str(args.fps),
-        "-pattern_type",
-        "glob",
-        "-i",
-        os.path.join(image_dir, f"rgb_env{args.env_id}_frame*.png"),
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        out_video,
-    ]
-    # Use stdout/stderr directly (not captured) so ffmpeg errors are visible.
-    print("[data_replay_video] Running ffmpeg ...", flush=True)
-    completed = subprocess.run(ffmpeg_cmd)
-    if completed.returncode != 0:
-        raise RuntimeError(f"[data_replay_video] ffmpeg failed with code {completed.returncode}")
-
-    print(f"[data_replay_video] Video saved to: {out_video}", flush=True)
-
-    # Cleanup frames directory after successful render.
-    # Keep the mp4 under exp/{exp_dir}/data_replay_*.mp4.
-    # User request: delete the `images` folder itself.
-    if exp_dir and os.path.isdir(image_dir):
-        try:
-            # Safety: only delete directories that end with `/images`.
-            if os.path.basename(image_dir) == "images":
-                shutil.rmtree(image_dir, ignore_errors=True)
-            else:
-                # Fallback: best-effort delete frame PNGs only.
-                frame_glob_cleanup = os.path.join(image_dir, f"rgb_env{args.env_id}_frame*.png")
-                cleanup_files = glob.glob(frame_glob_cleanup, recursive=True)
-                for p in cleanup_files:
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
-        except Exception:
-            # Never fail the whole pipeline because cleanup failed.
-            pass
+    result = subprocess.run(cmd, env=child_env)
+    if result.returncode != 0:
+        raise RuntimeError(f"[data_replay_video] Replay subprocess failed with code {result.returncode}")
 
 
 if __name__ == "__main__":
